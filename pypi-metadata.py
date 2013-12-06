@@ -1,76 +1,153 @@
+import sys
 import xmlrpclib
-# only one api server so we'll use the deutschland mirror for downloading
-client = xmlrpclib.ServerProxy('http://pypi.python.org/pypi')
-packages = client.list_packages()
 
 import tarfile, re, requests, csv, json
-from base64 import b64encode
+from zipfile import ZipFile
+from bz2 import BZ2File
+from base64 import b64encode, b64decode
+from funcy import first, ikeep, re_find, re_test, distinct
+
+
+def print_alert(message):
+    print '\033[1;31m%s\033[1;m' % message
+
 
 def _extract_deps(content):
     """ Extract dependencies using install_requires directive """
     results = re.findall("install_requires=\[([\W'a-zA-Z0-9]*?)\]", content, re.M)
     deps = []
     if results:
-        deps = [a.replace("'", "").strip() 
-                for a in results[0].strip().split(",") 
+        deps = [a.replace("'", "").strip()
+                for a in results[0].strip().split(",")
                 if a.replace("'", "").strip() != ""]
     return deps
-    
-def _extract_setup_content(package_file):
+
+
+class SetupReadError(Exception):
+    pass
+
+def is_setup(filename):
+    return filename.count('/') <= 1 and re_test(r'(^|/)setup.py$', filename)
+
+def _extract_setup_content(filename, format):
     """Extract setup.py content as string from downladed tar """
-    tar_file = tarfile.open(fileobj=package_file)
-    setup_candidates = [elem for elem in tar_file.getmembers() if 'setup.py' in elem.name]
-    if len(setup_candidates) == 1:
-        setup_member = setup_candidates[0]
-        content = tar_file.extractfile(setup_member).read()
-        return content
+    if format in {'gz', 'bz2'}:
+        tar_file = tarfile.open(filename)
+        setup_candidates = [elem for elem in tar_file.getmembers() if is_setup(elem.name)]
+        reader = lambda name: tar_file.extractfile(name).read()
+    elif format == 'zip':
+        zip_file = ZipFile(filename)
+        setup_candidates = filter(is_setup, zip_file.namelist())
+        reader = zip_file.read
     else:
-        print "Too few candidates or too many for setup.py in tar" 
-        return None
-    
-def extract_package(name, client = xmlrpclib.ServerProxy('http://pypi.python.org/pypi')):
+        raise SetupReadError('setup_format')
+
+    if not setup_candidates:
+        raise SetupReadError('no_setup')
+    elif len(setup_candidates) > 1:
+        raise SetupReadError('many_setups')
+    else:
+        return reader(setup_candidates[0])
+
+
+def extract_package(name, client = xmlrpclib.ServerProxy('http://pypi.python.org/pypi'), verbose=False):
     with open('pypi-deps.csv', 'a') as file:
         spamwriter = csv.writer(file, delimiter='\t',
                             quotechar='|', quoting=csv.QUOTE_MINIMAL)
+        releases = client.package_releases(name)
+        if not releases:
+            print_alert("%s: no releases" % name)
+            spamwriter.writerow([name, '-', '-no_releases'])
+
         for release in client.package_releases(name):
-            #print "Extracting %s release %s" % (name, release) 
+            if verbose:
+                print "Extracting %s release %s" % (name, release)
             doc = client.release_urls(name, release)
-            if doc:
-                url = doc[0].get('url').replace("http://pypi.python.org/", "http://f.pypi.python.org/")
-                #print "Downloading url %s" % url
+            if verbose:
+                for d in doc:
+                    print d
+            urls = [d['url'] for d in doc if not re_test(r'\.(egg|exe|whl)$', d['url'])]
+
+            if urls:
+                url = first(urls).replace("http://pypi.python.org/", "http://f.pypi.python.org/")
+                if verbose:
+                    print "Downloading url %s" % url
                 req = requests.get(url)
                 if req.status_code != 200:
-                    print "Could not download file %s" % req.status_code
+                    print_alert("%s: download failed with %s" % (name, req.status_code))
                 else:
-                    with open('/tmp/temp_tar', 'w') as tar_file:
-                        tar_file.write(req.content)
-                    with open('/tmp/temp_tar', 'r') as tar_file:
-                        try:
-                            content = _extract_setup_content(tar_file)
-                        except:
-                            content = None
-                    if content:
-                        spamwriter.writerow([name, release, b64encode(json.dumps(_extract_deps(content)))])
-# main processing
-for package in packages:
-    extract_package(package, client)
+                    with open('/tmp/temp_file', 'w') as f:
+                        f.write(req.content)
 
-# graph creation
-import networkx as nx, json
-from base64 import b64decode
+                    try:
+                        content = _extract_setup_content('/tmp/temp_file',
+                                                         format=re_find(r'\.(\w+)$', url))
+                    except SetupReadError as e:
+                        print_alert("%s: version %s setup read error - %s"
+                                        % (name, release, e.args[0]))
+                        spamwriter.writerow([name, release, '-%s' % e.args[0]])
+                        continue
 
-data = []
-G=nx.Graph()
-with open('pypi-deps.csv', 'r') as file:
-    for line in file:
-        name, version, deps = line.split('\t')
-        deps = json.loads(b64decode(deps))
-        data+= [(name, version, deps)]
+                    deps = _extract_deps(content)
+                    print '%s: version %s depends on %s' % (name, release, deps)
+                    spamwriter.writerow([name, release, b64encode(json.dumps(deps))])
+            else:
+                print_alert("%s: no release urls" % name)
+                spamwriter.writerow([name, release, '-no_urls'])
 
-for ex in data:
-    name, version, deps = ex
-    G.add_node("%s-%s" % (name, version))
-    for dep in deps:
-        if not '#' in dep: G.add_edge("%s-%s" % (name, version), dep.replace("\"", ""))
 
-nx.write_gml(G, 'test.gml')
+def load_graph():
+    def decode_line(line):
+        name, version, deps = line.strip().split('\t')
+        deps = json.loads(b64decode(deps)) if not deps.startswith('-') else None
+        return (name, version, deps)
+
+    with open('pypi-deps.csv', 'r') as f:
+        data = map(decode_line, f)
+
+    return data
+
+def simple_dep(dep):
+    dep = dep.strip('"')
+    # comment
+    if dep.startswith('#'):
+        return None
+    # some code
+    if set('()#\n') & set(dep):
+        return None
+    # no name
+    if re_test(r'^(?:==|>=|<=|>|<|!=|$)', dep):
+        return None
+
+    res = re_find(r'^\s*([\w\.\-]+)\s*(?:==|>=|<=|>|<|!=|$)', dep)
+    if dep and not res:
+        print_alert('dep: %r, res: %r' % (dep, res))
+    return res.lower() if res else res
+
+def simple_deps(deps):
+    return set(ikeep(simple_dep, deps))
+
+# print sys.argv
+action = sys.argv[1] if len(sys.argv) > 1 else 'load'
+
+if action == 'load':
+    client = xmlrpclib.ServerProxy('http://pypi.python.org/pypi')
+    packages = client.list_packages()
+    loaded = {name for name, _, _ in load_graph()}
+    print '>>> Packages %d, loaded %d' % (len(packages), len(loaded))
+    print '>>> %d to go...' % (len(packages) - len(loaded))
+
+    for package in packages:
+        if package not in loaded:
+            extract_package(package, client, verbose='-v' in sys.argv)
+
+elif action == 'one':
+    extract_package(sys.argv[2], verbose=True)
+
+elif action == 'rev':
+    seek_for = sys.argv[2]
+    loaded = [(name, simple_deps(deps)) for name, _, deps in load_graph() if deps]
+
+    dependants = distinct(name for name, deps in loaded if seek_for in deps)
+    print '>>> %d dependants on %s' % (len(dependants), seek_for)
+    print dependants[-40:]
