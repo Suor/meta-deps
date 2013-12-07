@@ -21,6 +21,8 @@ def print_notice(message):
 
 def _extract_deps(content):
     """ Extract dependencies using install_requires directive """
+    # strip comments
+    content = re.sub(r'#.*$', '', content, flags=re.M)
     results = re.findall("install_requires=\[([\W'a-zA-Z0-9]*?)\]", content, re.M)
     deps = []
     if results:
