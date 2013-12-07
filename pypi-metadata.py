@@ -9,7 +9,7 @@ import tarfile, re, requests, csv, json
 from zipfile import ZipFile
 from bz2 import BZ2File
 from base64 import b64encode, b64decode
-from funcy import first, ikeep, re_find, re_test, distinct, retry, log_errors, compose
+from funcy import *
 
 
 def print_alert(message):
@@ -175,3 +175,9 @@ elif action == 'rev':
     dependants = distinct(name for name, deps in loaded if seek_for in deps)
     print_notice('>>> %d dependants on %s' % (len(dependants), seek_for))
     print dependants[-40:]
+
+elif action == 'top':
+    all_deps = cat(simple_deps(deps) for _, _, deps in load_graph() if deps)
+    dep_counts = count_by(identity, all_deps)
+    for name, cnt in sorted(dep_counts.items(), key=second, reverse=True):
+        print "%40s\t%5d" % (name, cnt)
