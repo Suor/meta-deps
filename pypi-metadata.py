@@ -5,7 +5,7 @@ import tarfile, re, requests, csv, json
 from zipfile import ZipFile
 from bz2 import BZ2File
 from base64 import b64encode, b64decode
-from funcy import first, ikeep, re_find, re_test, distinct
+from funcy import first, ikeep, re_find, re_test, distinct, retry, log_errors, compose
 
 
 def print_alert(message):
@@ -87,6 +87,10 @@ def extract_package(name, client = xmlrpclib.ServerProxy('http://pypi.python.org
                                         % (name, release, e.args[0]))
                         spamwriter.writerow([name, release, '-%s' % e.args[0]])
                         continue
+                    except Exception as e:
+                        print_alert("%s: version %s: %s" % (name, release, e))
+                        spamwriter.writerow([name, release, '-%s' % e.__class__.__name__])
+                        continue
 
                     deps = _extract_deps(content)
                     print '%s: version %s depends on %s' % (name, release, deps)
@@ -137,9 +141,19 @@ if action == 'load':
     print '>>> Packages %d, loaded %d' % (len(packages), len(loaded))
     print '>>> %d to go...' % (len(packages) - len(loaded))
 
-    for package in packages:
-        if package not in loaded:
-            extract_package(package, client, verbose='-v' in sys.argv)
+    try_harder = compose(
+        retry(3, xmlrpclib.ProtocolError),
+        log_errors(print_alert)
+    )
+    harder_extract = try_harder(extract_package)
+
+    try:
+        for package in packages:
+            if package not in loaded:
+                harder_extract(package, client, verbose='-v' in sys.argv)
+    except KeyboardInterrupt:
+        pass
+
 
 elif action == 'one':
     extract_package(sys.argv[2], verbose=True)
