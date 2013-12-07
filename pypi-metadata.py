@@ -133,7 +133,7 @@ def simple_dep(dep):
         return None
 
     res = re_find(r'^\s*([\w\.\-]+)\s*(?:==|>=|<=|>|<|!=|$)', dep)
-    return res
+    return res.lower() if res else res
     if dep and not res:
         print_alert('dep: %r, res: %r' % (dep, res))
     return res.lower() if res else res
