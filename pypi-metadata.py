@@ -1,3 +1,7 @@
+# TODO:
+#      - check for github/other repo url if there are no releases
+#      - check requirements.txt
+
 import sys
 import xmlrpclib
 
