@@ -180,4 +180,7 @@ elif action == 'top':
     all_deps = cat(simple_deps(deps) for _, _, deps in load_graph() if deps)
     dep_counts = count_by(identity, all_deps)
     for name, cnt in sorted(dep_counts.items(), key=second, reverse=True):
-        print "%40s\t%5d" % (name, cnt)
+        try:
+            print "%40s\t%5d" % (name, cnt)
+        except IOError:
+            break # pipe closed
