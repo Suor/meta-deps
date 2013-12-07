@@ -1,7 +1,22 @@
 meta-deps
 =========
 
-Dependency computation project for maven/java and pip/python examples
+Load all python package dependencies from pypi:
 
+``` bash
+./pypi-metadata.py load
+```
 
-This work is licensed under the Creative Commons Attribution 3.0 Unported License. To view a copy of this license, visit http://creativecommons.org/licenses/by/3.0/ or send a letter to Creative Commons, 444 Castro Street, Suite 900, Mountain View, California, 94041, USA.
+Query dependants on something:
+
+``` bash
+./pypi-metadata.py rev <package-name>
+```
+
+Show packages most depended upon:
+
+``` bash
+./pypi-metadata.py top
+```
+
+Based on [script by ssaboum](https://github.com/ssaboum/meta-deps).
