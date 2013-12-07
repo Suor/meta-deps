@@ -15,6 +15,9 @@ from funcy import first, ikeep, re_find, re_test, distinct, retry, log_errors, c
 def print_alert(message):
     print '\033[1;31m%s\033[1;m' % message
 
+def print_notice(message):
+    print "\033[32m%s\033[0m" % message
+
 
 def _extract_deps(content):
     """ Extract dependencies using install_requires directive """
@@ -142,8 +145,8 @@ if action == 'load':
     client = xmlrpclib.ServerProxy('http://pypi.python.org/pypi')
     packages = client.list_packages()
     loaded = {name for name, _, _ in load_graph()}
-    print '>>> Packages %d, loaded %d' % (len(packages), len(loaded))
-    print '>>> %d to go...' % (len(packages) - len(loaded))
+    print_notice('>>> Packages %d, loaded %d' % (len(packages), len(loaded)))
+    print_notice('>>> %d to go...' % (len(packages) - len(loaded)))
 
     try_harder = compose(
         retry(3, xmlrpclib.ProtocolError),
@@ -167,5 +170,5 @@ elif action == 'rev':
     loaded = [(name, simple_deps(deps)) for name, _, deps in load_graph() if deps]
 
     dependants = distinct(name for name, deps in loaded if seek_for in deps)
-    print '>>> %d dependants on %s' % (len(dependants), seek_for)
+    print_notice('>>> %d dependants on %s' % (len(dependants), seek_for))
     print dependants[-40:]
